@@ -143,32 +143,37 @@ export async function POST(request: NextRequest) {
     }
 
     // Sanitize string contents to prevent XSS/injection attacks inside HTML email rendering
-    const sanitizedFromName = fromName ? sanitizeInput(fromName) : '';
-    const sanitizedFromEmail = fromEmail ? sanitizeInput(fromEmail) : '';
-    const sanitizedSubject = sanitizeInput(subject);
+    const sanitizedFromName = fromName ? sanitizeHtml(fromName) : '';
+    const sanitizedFromEmail = fromEmail ? sanitizeHtml(fromEmail) : '';
+    const sanitizedSubject = sanitizeHtml(subject);
     const sanitizedPersonalMessage = content ? sanitizeHtml(content) : '';
     
     const sanitizedLetterContent = {
       from: {
-        name: letterContent.from?.name ? sanitizeInput(letterContent.from.name) : '',
-        address: letterContent.from?.address ? sanitizeInput(letterContent.from.address) : '',
+        name: letterContent.from?.name ? sanitizeHtml(letterContent.from.name) : '',
+        address: letterContent.from?.address ? sanitizeHtml(letterContent.from.address) : '',
       },
       to: {
-        name: letterContent.to?.name ? sanitizeInput(letterContent.to.name) : '',
-        address: letterContent.to?.address ? sanitizeInput(letterContent.to.address) : '',
+        name: letterContent.to?.name ? sanitizeHtml(letterContent.to.name) : '',
+        address: letterContent.to?.address ? sanitizeHtml(letterContent.to.address) : '',
       },
-      date: letterContent.date ? sanitizeInput(letterContent.date) : '',
-      subject: letterContent.subject ? sanitizeInput(letterContent.subject) : '',
+      date: letterContent.date ? sanitizeHtml(letterContent.date) : '',
+      subject: letterContent.subject ? sanitizeHtml(letterContent.subject) : '',
       content: letterContent.content ? sanitizeHtml(letterContent.content) : '',
     };
 
     const hasFullSmtpConfig =
       !!process.env.EMAIL_HOST && !!process.env.EMAIL_USER && !!process.env.EMAIL_PASS;
+    const allowTestSmtp = process.env.NODE_ENV !== 'production';
     const hasPartialSmtpConfig =
       !!process.env.EMAIL_HOST || !!process.env.EMAIL_USER || !!process.env.EMAIL_PASS;
 
     if (hasPartialSmtpConfig && !hasFullSmtpConfig) {
       throw new Error('EMAIL_HOST, EMAIL_USER, and EMAIL_PASS must be configured together');
+    }
+
+    if (!hasFullSmtpConfig && !allowTestSmtp) {
+      throw new Error('SMTP is not configured for this environment');
     }
 
     let smtpHost = process.env.EMAIL_HOST ?? 'smtp.ethereal.email';
@@ -241,10 +246,12 @@ export async function POST(request: NextRequest) {
     });
 
     // Get the Ethereal URL for viewing the test email (only for Ethereal emails)
-    const previewUrl = hasFullSmtpConfig ? null : nodemailer.getTestMessageUrl(info);
+    const previewUrl =
+      !hasFullSmtpConfig && allowTestSmtp ? nodemailer.getTestMessageUrl(info) : null;
 
-    // Log successful email dispatch internally
-    logSecurityEvent('EMAIL_SENT_SUCCESSFULLY', { userId: user.id, messageId: info.messageId, to, ip }, ip);
+    // Log successful email dispatch internally without PII
+    const recipientDomain = to.split('@')[1];
+    logSecurityEvent('EMAIL_SENT_SUCCESSFULLY', { userId: user.id, messageId: info.messageId, recipientDomain, ip }, ip);
 
     return new Response(
       JSON.stringify({
